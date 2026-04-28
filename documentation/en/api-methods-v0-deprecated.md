@@ -4918,7 +4918,7 @@ Response:
     "UpgradeTeepHeight": 10101,
     "UpgradeTockHeight": 10101,
     "UpgradeGoldenWeekHeight": 10101,
-    "UpgradeXxHeight": 10101
+    "UpgradeFireHorseHeight": 10101
   },
   "Eip155ChainID": 123,
   "GenesisTimestamp": 42
@@ -6847,7 +6847,7 @@ Response:
 ```
 
 ### SyncSubmitBlock
-SyncSubmitBlock can be used to submit a newly created block to the.
+SyncSubmitBlock can be used to submit a newly created block to the
 network through this node
 
 

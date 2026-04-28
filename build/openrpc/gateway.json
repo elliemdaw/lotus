@@ -2,7 +2,7 @@
     "openrpc": "1.2.6",
     "info": {
         "title": "Lotus RPC API",
-        "version": "1.34.4-dev"
+        "version": "1.35.2-dev"
     },
     "methods": [
         {
@@ -940,17 +940,7 @@
                                     "title": "Content Identifier",
                                     "type": "string"
                                 },
-                                "Message": {
-                                    "additionalProperties": false,
-                                    "properties": {
-                                        "Cid": {
-                                            "title": "Content Identifier",
-                                            "type": "string"
-                                        },
-                                        "Message": {}
-                                    },
-                                    "type": "object"
-                                }
+                                "Message": {}
                             },
                             "type": [
                                 "object"
@@ -1033,17 +1023,7 @@
                                     "title": "Content Identifier",
                                     "type": "string"
                                 },
-                                "Message": {
-                                    "additionalProperties": false,
-                                    "properties": {
-                                        "Cid": {
-                                            "title": "Content Identifier",
-                                            "type": "string"
-                                        },
-                                        "Message": {}
-                                    },
-                                    "type": "object"
-                                }
+                                "Message": {}
                             },
                             "type": [
                                 "object"
@@ -9511,7 +9491,7 @@
                                 "UpgradeTeepHeight": 10101,
                                 "UpgradeTockHeight": 10101,
                                 "UpgradeGoldenWeekHeight": 10101,
-                                "UpgradeXxHeight": 10101
+                                "UpgradeFireHorseHeight": 10101
                             },
                             "Eip155ChainID": 123,
                             "GenesisTimestamp": 42
@@ -9559,6 +9539,10 @@
                                     "type": "number"
                                 },
                                 "UpgradeDragonHeight": {
+                                    "title": "number",
+                                    "type": "number"
+                                },
+                                "UpgradeFireHorseHeight": {
                                     "title": "number",
                                     "type": "number"
                                 },
@@ -9659,10 +9643,6 @@
                                     "type": "number"
                                 },
                                 "UpgradeWatermelonHeight": {
-                                    "title": "number",
-                                    "type": "number"
-                                },
-                                "UpgradeXxHeight": {
                                     "title": "number",
                                     "type": "number"
                                 }
