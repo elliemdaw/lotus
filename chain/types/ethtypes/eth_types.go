@@ -15,10 +15,10 @@ import (
 	"github.com/multiformats/go-multihash"
 	mh "github.com/multiformats/go-multihash"
 	"github.com/multiformats/go-varint"
-	"golang.org/x/crypto/sha3"
 	"golang.org/x/xerrors"
 
 	"github.com/filecoin-project/go-address"
+	"github.com/filecoin-project/go-keccak"
 	"github.com/filecoin-project/go-state-types/abi"
 	"github.com/filecoin-project/go-state-types/big"
 	builtintypes "github.com/filecoin-project/go-state-types/builtin"
@@ -365,13 +365,35 @@ func (sr EthSyncingResult) MarshalJSON() ([]byte, error) {
 
 	// need to do an anonymous struct to avoid infinite recursion
 	return json.Marshal(&struct {
-		StartingBlock EthUint64 `json:"startingblock"`
-		CurrentBlock  EthUint64 `json:"currentblock"`
-		HighestBlock  EthUint64 `json:"highestblock"`
+		StartingBlock EthUint64 `json:"startingBlock"`
+		CurrentBlock  EthUint64 `json:"currentBlock"`
+		HighestBlock  EthUint64 `json:"highestBlock"`
 	}{
 		StartingBlock: sr.StartingBlock,
 		CurrentBlock:  sr.CurrentBlock,
 		HighestBlock:  sr.HighestBlock})
+}
+
+func (sr *EthSyncingResult) UnmarshalJSON(b []byte) error {
+	var syncing bool
+	if err := json.Unmarshal(b, &syncing); err == nil && !syncing {
+		*sr = EthSyncingResult{DoneSync: true}
+		return nil
+	}
+	var result struct {
+		StartingBlock EthUint64 `json:"startingBlock"`
+		CurrentBlock  EthUint64 `json:"currentBlock"`
+		HighestBlock  EthUint64 `json:"highestBlock"`
+	}
+	if err := json.Unmarshal(b, &result); err != nil {
+		return err
+	}
+	*sr = EthSyncingResult{
+		StartingBlock: result.StartingBlock,
+		CurrentBlock:  result.CurrentBlock,
+		HighestBlock:  result.HighestBlock,
+	}
+	return nil
 }
 
 const (
@@ -425,7 +447,7 @@ func EthAddressFromPubKey(pubk []byte) ([]byte, error) {
 	pubk = pubk[1:]
 
 	// Calculate the Ethereum address based on the keccak hash of the pubkey.
-	hasher := sha3.NewLegacyKeccak256()
+	hasher := keccak.NewLegacyKeccak256()
 	hasher.Write(pubk)
 	ethAddr := hasher.Sum(nil)[12:]
 	return ethAddr, nil
@@ -643,7 +665,7 @@ func ParseEthHash(s string) (EthHash, error) {
 }
 
 func EthHashFromTxBytes(b []byte) EthHash {
-	hasher := sha3.NewLegacyKeccak256()
+	hasher := keccak.NewLegacyKeccak256()
 	hasher.Write(b)
 	hash := hasher.Sum(nil)
 
@@ -653,7 +675,7 @@ func EthHashFromTxBytes(b []byte) EthHash {
 }
 
 func EthBloomSet(f EthBytes, data []byte) {
-	hasher := sha3.NewLegacyKeccak256()
+	hasher := keccak.NewLegacyKeccak256()
 	hasher.Write(data)
 	hash := hasher.Sum(nil)
 
@@ -908,7 +930,7 @@ type EthSubscriptionResponse struct {
 }
 
 func GetContractEthAddressFromCode(sender EthAddress, salt [32]byte, initcode []byte) (EthAddress, error) {
-	hasher := sha3.NewLegacyKeccak256()
+	hasher := keccak.NewLegacyKeccak256()
 	hasher.Write(initcode)
 	inithash := hasher.Sum(nil)
 

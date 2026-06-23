@@ -1845,7 +1845,7 @@ Response:
 
 
 ### CreateBackup
-CreateBackup creates node backup onder the specified file name. The
+CreateBackup creates node backup under the specified file name. The
 method requires that the lotus daemon is running with the
 LOTUS_BACKUP_BASE_PATH environment variable set to some path, and that
 the path specified when calling CreateBackup is within the base path
@@ -7474,7 +7474,7 @@ Response:
     "UpgradeTeepHeight": 10101,
     "UpgradeTockHeight": 10101,
     "UpgradeGoldenWeekHeight": 10101,
-    "UpgradeXxHeight": 10101
+    "UpgradeFireHorseHeight": 10101
   },
   "Eip155ChainID": 123,
   "GenesisTimestamp": 42
@@ -9527,7 +9527,7 @@ Response:
 ```
 
 ### SyncSubmitBlock
-SyncSubmitBlock can be used to submit a newly created block to the.
+SyncSubmitBlock can be used to submit a newly created block to the
 network through this node
 
 
