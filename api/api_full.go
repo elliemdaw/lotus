@@ -820,6 +820,14 @@ type FullNode interface {
 	// "Latest executed epoch" refers to the tipset that this node currently
 	// accepts as the best parent tipset, based on the blocks it is accumulating
 	// within the HEAD tipset.
+	//
+	// Filecoin may have null epochs with no tipset. ETH APIs that inspect a
+	// concrete block or that block's execution reject explicit numeric null
+	// epochs with ErrNullRound. ETH APIs that read state at an epoch, or sample
+	// real tipsets across a range, may resolve null epochs to the previous
+	// non-null tipset. Filecoin state is defined for the null epoch and is
+	// identical to that previous state, and range APIs skip null epochs when
+	// walking parent tipsets.
 
 	// EthAccounts will always return [] since we don't expect Lotus to manage private keys
 	EthAccounts(ctx context.Context) ([]ethtypes.EthAddress, error) //perm:read
@@ -882,8 +890,11 @@ type FullNode interface {
 	NetVersion(ctx context.Context) (string, error)                                                                                                                  //perm:read
 	NetListening(ctx context.Context) (bool, error)                                                                                                                  //perm:read
 	EthProtocolVersion(ctx context.Context) (ethtypes.EthUint64, error)                                                                                              //perm:read
-	EthGasPrice(ctx context.Context) (ethtypes.EthBigInt, error)                                                                                                     //perm:read
-	EthFeeHistory(ctx context.Context, p jsonrpc.RawParams) (ethtypes.EthFeeHistory, error)                                                                          //perm:read
+	// EthBaseFee retrieves the base fee of the next block.
+	// Maps to JSON-RPC method: "eth_baseFee".
+	EthBaseFee(ctx context.Context) (ethtypes.EthBigInt, error)                             //perm:read
+	EthGasPrice(ctx context.Context) (ethtypes.EthBigInt, error)                            //perm:read
+	EthFeeHistory(ctx context.Context, p jsonrpc.RawParams) (ethtypes.EthFeeHistory, error) //perm:read
 
 	EthMaxPriorityFeePerGas(ctx context.Context) (ethtypes.EthBigInt, error)                                             //perm:read
 	EthEstimateGas(ctx context.Context, p jsonrpc.RawParams) (ethtypes.EthUint64, error)                                 //perm:read

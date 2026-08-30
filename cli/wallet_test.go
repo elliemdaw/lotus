@@ -1,10 +1,12 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"os"
 	"testing"
 
 	"github.com/golang/mock/gomock"
@@ -18,7 +20,6 @@ import (
 	"github.com/filecoin-project/go-state-types/crypto"
 
 	"github.com/filecoin-project/lotus/api"
-	apitypes "github.com/filecoin-project/lotus/api/types"
 	"github.com/filecoin-project/lotus/chain/types"
 	"github.com/filecoin-project/lotus/chain/types/mock"
 )
@@ -175,28 +176,177 @@ func TestWalletSetDefault(t *testing.T) {
 }
 
 func TestWalletExport(t *testing.T) {
-	app, mockApi, buffer, done := NewMockAppWithFullAPI(t, WithCategory("wallet", walletExport))
-	defer done()
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
 	addr, err := address.NewIDAddress(1234)
 	assert.NoError(t, err)
 
-	keyInfo := types.KeyInfo{
-		Type:       types.KTSecp256k1,
-		PrivateKey: []byte("0x000000000000000000001"),
+	pkBytes := make([]byte, 32)
+	for i := range pkBytes {
+		pkBytes[i] = byte(i + 1)
+	}
+	pkHex := hex.EncodeToString(pkBytes)
+
+	t.Run("default-format-is-hex-lotus", func(t *testing.T) {
+		app, mockApi, buffer, done := NewMockAppWithFullAPI(t, WithCategory("wallet", walletExport))
+		defer done()
+
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
+		ki := types.KeyInfo{Type: types.KTSecp256k1, PrivateKey: pkBytes}
+		mockApi.EXPECT().WalletExport(ctx, addr).Return(&ki, nil)
+
+		expected, err := json.Marshal(ki)
+		assert.NoError(t, err)
+
+		err = app.Run([]string{"wallet", "export", "f01234"})
+		assert.NoError(t, err)
+		assert.Contains(t, buffer.String(), hex.EncodeToString(expected))
+	})
+
+	t.Run("json-lotus", func(t *testing.T) {
+		app, mockApi, buffer, done := NewMockAppWithFullAPI(t, WithCategory("wallet", walletExport))
+		defer done()
+
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
+		ki := types.KeyInfo{Type: types.KTSecp256k1, PrivateKey: pkBytes}
+		mockApi.EXPECT().WalletExport(ctx, addr).Return(&ki, nil)
+
+		expected, err := json.Marshal(ki)
+		assert.NoError(t, err)
+
+		err = app.Run([]string{"wallet", "export", "--format", "json-lotus", "f01234"})
+		assert.NoError(t, err)
+		assert.Contains(t, buffer.String(), string(expected))
+	})
+
+	t.Run("hex-eth", func(t *testing.T) {
+		app, mockApi, buffer, done := NewMockAppWithFullAPI(t, WithCategory("wallet", walletExport))
+		defer done()
+
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
+		ki := types.KeyInfo{Type: types.KTDelegated, PrivateKey: pkBytes}
+		mockApi.EXPECT().WalletExport(ctx, addr).Return(&ki, nil)
+
+		err = app.Run([]string{"wallet", "export", "--format", "hex-eth", "f01234"})
+		assert.NoError(t, err)
+		assert.Contains(t, buffer.String(), "0x"+pkHex)
+	})
+
+	t.Run("hex-eth-rejects-bls", func(t *testing.T) {
+		app, mockApi, _, done := NewMockAppWithFullAPI(t, WithCategory("wallet", walletExport))
+		defer done()
+
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
+		ki := types.KeyInfo{Type: types.KTBLS, PrivateKey: pkBytes}
+		mockApi.EXPECT().WalletExport(ctx, addr).Return(&ki, nil)
+
+		err = app.Run([]string{"wallet", "export", "--format", "hex-eth", "f01234"})
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "hex-eth")
+	})
+
+	t.Run("unknown-format", func(t *testing.T) {
+		app, mockApi, _, done := NewMockAppWithFullAPI(t, WithCategory("wallet", walletExport))
+		defer done()
+
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
+		ki := types.KeyInfo{Type: types.KTSecp256k1, PrivateKey: pkBytes}
+		mockApi.EXPECT().WalletExport(ctx, addr).Return(&ki, nil)
+
+		err = app.Run([]string{"wallet", "export", "--format", "bogus", "f01234"})
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "unrecognized format")
+	})
+}
+
+func TestWalletImportHexEth(t *testing.T) {
+	addr, err := address.NewIDAddress(1234)
+	assert.NoError(t, err)
+
+	pkBytes := make([]byte, 32)
+	for i := range pkBytes {
+		pkBytes[i] = byte(i + 1)
+	}
+	pkHex := hex.EncodeToString(pkBytes)
+
+	writeTmp := func(t *testing.T, content string) string {
+		t.Helper()
+		f, err := os.CreateTemp(t.TempDir(), "key-*.hex")
+		assert.NoError(t, err)
+		_, err = f.WriteString(content)
+		assert.NoError(t, err)
+		assert.NoError(t, f.Close())
+		return f.Name()
 	}
 
-	mockApi.EXPECT().WalletExport(ctx, addr).Return(&keyInfo, nil)
+	t.Run("delegated-default", func(t *testing.T) {
+		app, mockApi, _, done := NewMockAppWithFullAPI(t, WithCategory("wallet", walletImport))
+		defer done()
 
-	ki, err := json.Marshal(keyInfo)
-	assert.NoError(t, err)
+		path := writeTmp(t, pkHex)
 
-	err = app.Run([]string{"wallet", "export", "f01234"})
-	assert.NoError(t, err)
-	assert.Contains(t, buffer.String(), hex.EncodeToString(ki))
+		expected := &types.KeyInfo{Type: types.KTDelegated, PrivateKey: pkBytes}
+		mockApi.EXPECT().WalletImport(gomock.Any(), expected).Return(addr, nil)
+
+		err = app.Run([]string{"wallet", "import", "--format", "hex-eth", path})
+		assert.NoError(t, err)
+	})
+
+	t.Run("secp256k1-explicit", func(t *testing.T) {
+		app, mockApi, _, done := NewMockAppWithFullAPI(t, WithCategory("wallet", walletImport))
+		defer done()
+
+		path := writeTmp(t, pkHex)
+
+		expected := &types.KeyInfo{Type: types.KTSecp256k1, PrivateKey: pkBytes}
+		mockApi.EXPECT().WalletImport(gomock.Any(), expected).Return(addr, nil)
+
+		err = app.Run([]string{"wallet", "import", "--format", "hex-eth", "--type", "secp256k1", path})
+		assert.NoError(t, err)
+	})
+
+	t.Run("strips-0x-prefix-and-whitespace", func(t *testing.T) {
+		app, mockApi, _, done := NewMockAppWithFullAPI(t, WithCategory("wallet", walletImport))
+		defer done()
+
+		path := writeTmp(t, "  0x"+pkHex+"\n")
+
+		expected := &types.KeyInfo{Type: types.KTDelegated, PrivateKey: pkBytes}
+		mockApi.EXPECT().WalletImport(gomock.Any(), expected).Return(addr, nil)
+
+		err = app.Run([]string{"wallet", "import", "--format", "hex-eth", path})
+		assert.NoError(t, err)
+	})
+
+	t.Run("rejects-wrong-length", func(t *testing.T) {
+		app, _, _, done := NewMockAppWithFullAPI(t, WithCategory("wallet", walletImport))
+		defer done()
+
+		path := writeTmp(t, "deadbeef")
+
+		err = app.Run([]string{"wallet", "import", "--format", "hex-eth", path})
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "32-byte")
+	})
+
+	t.Run("rejects-invalid-type", func(t *testing.T) {
+		app, _, _, done := NewMockAppWithFullAPI(t, WithCategory("wallet", walletImport))
+		defer done()
+
+		path := writeTmp(t, pkHex)
+
+		err = app.Run([]string{"wallet", "import", "--format", "hex-eth", "--type", "bls", path})
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "must be 'secp256k1' or 'delegated'")
+	})
 }
 
 func TestWrapMessageFRC0102(t *testing.T) {
@@ -366,9 +516,13 @@ func TestWalletMarketWithdraw(t *testing.T) {
 	h, err := hex.DecodeString("12209cbc07c3f991725836a3aa2a581ca2029198aa420b9d99bc0e131d9f3e2cbe47")
 	assert.NoError(t, err)
 	cid := cid.NewCidV0(multihash.Multihash(h))
-	msgLookup := api.MsgLookup{}
 
-	var networkVers apitypes.NetworkVersion
+	withdrawn := abi.NewTokenAmount(80)
+	returnBuf := new(bytes.Buffer)
+	assert.NoError(t, withdrawn.MarshalCBOR(returnBuf))
+	msgLookup := api.MsgLookup{
+		Receipt: types.MessageReceipt{Return: returnBuf.Bytes()},
+	}
 
 	gomock.InOrder(
 		mockApi.EXPECT().StateMarketBalance(ctx, addr, types.TipSetKey{}).Return(balance, nil),
@@ -377,7 +531,6 @@ func TestWalletMarketWithdraw(t *testing.T) {
 		// available should be 80.. escrow - locked - reserve
 		mockApi.EXPECT().MarketWithdraw(ctx, addr, addr, big.NewInt(80)).Return(cid, nil),
 		mockApi.EXPECT().StateWaitMsg(ctx, cid, uint64(5), abi.ChainEpoch(int64(-1)), true).Return(&msgLookup, nil),
-		mockApi.EXPECT().StateNetworkVersion(ctx, types.TipSetKey{}).Return(networkVers, nil),
 	)
 
 	err = app.Run([]string{"wallet", "market", "withdraw", "--wallet", addr.String()})

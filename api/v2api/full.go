@@ -150,6 +150,14 @@ type FullNode interface {
 	// "Latest executed epoch" refers to the tipset that this node currently
 	// accepts as the best parent tipset, based on the blocks it is accumulating
 	// within the HEAD tipset.
+	//
+	// Filecoin may have null epochs with no tipset. ETH APIs that inspect a
+	// concrete block or that block's execution reject explicit numeric null
+	// epochs with ErrNullRound. ETH APIs that read state at an epoch, or sample
+	// real tipsets across a range, may resolve null epochs to the previous
+	// non-null tipset. Filecoin state is defined for the null epoch and is
+	// identical to that previous state, and range APIs skip null epochs when
+	// walking parent tipsets.
 
 	// EthFilecoinAPI methods
 
@@ -358,6 +366,10 @@ type FullNode interface {
 	EthTraceFilter(ctx context.Context, filter ethtypes.EthTraceFilterCriteria) ([]*ethtypes.EthTraceFilterResult, error) //perm:read
 
 	// EthGasAPI methods
+
+	// EthBaseFee retrieves the base fee of the next block.
+	// Maps to JSON-RPC method: "eth_baseFee".
+	EthBaseFee(ctx context.Context) (ethtypes.EthBigInt, error) //perm:read
 
 	// EthGasPrice retrieves the current gas price in the network.
 	// Maps to JSON-RPC method: "eth_gasPrice".

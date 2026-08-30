@@ -648,6 +648,11 @@ func TestTxReceiptBloom(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
 
+	client.WaitTillChain(ctx, kit.HeightAtLeast(2))
+	emptyBlock, err := client.EthGetBlockByNumber(ctx, "latest", false)
+	require.NoError(t, err)
+	require.Equal(t, ethtypes.EthBytes(ethtypes.NewEmptyEthBloom()), emptyBlock.LogsBloom)
+
 	fromAddr, idAddr := client.EVM().DeployContractFromFilename(ctx, "contracts/EventMatrix.hex")
 
 	_, ml, err := client.EVM().InvokeContractByFuncName(ctx, fromAddr, idAddr, "logEventZeroData()", nil)
@@ -671,6 +676,27 @@ func TestTxReceiptBloom(t *testing.T) {
 	ethtypes.EthBloomSet(expectedBloom, receipt.To[:])
 
 	require.Equal(t, expectedBloom, []uint8(receipt.LogsBloom))
+
+	block, err := client.EthGetBlockByHash(ctx, receipt.BlockHash, false)
+	require.NoError(t, err)
+
+	blockReceipts, err := client.EthGetBlockReceipts(ctx, ethtypes.EthBlockNumberOrHash{BlockHash: &receipt.BlockHash})
+	require.NoError(t, err)
+	require.NotEmpty(t, blockReceipts)
+
+	expectedBlockBloom := ethtypes.NewEmptyEthBloom()
+	for _, receipt := range blockReceipts {
+		for i, b := range receipt.LogsBloom {
+			expectedBlockBloom[i] |= b
+		}
+	}
+	require.Equal(t, ethtypes.EthBytes(expectedBlockBloom), block.LogsBloom)
+	require.False(t, bytes.Equal(ethtypes.NewFullEthBloom(), block.LogsBloom))
+
+	blockByNumber, err := client.EthGetBlockByNumber(ctx, receipt.BlockNumber.Hex(), false)
+	require.NoError(t, err)
+	require.Equal(t, ethtypes.EthBytes(expectedBlockBloom), blockByNumber.LogsBloom)
+	require.False(t, bytes.Equal(ethtypes.NewFullEthBloom(), blockByNumber.LogsBloom))
 }
 
 func TestMultipleEvents(t *testing.T) {
@@ -688,7 +714,7 @@ func TestMultipleEvents(t *testing.T) {
 	kit.SendFunds(ctx, t, client, deployer, types.FromFil(10))
 
 	// DEPLOY CONTRACT
-	tx := deployContractWithEthTx(ctx, t, client, ethAddr, "./contracts/MultipleEvents.hex")
+	tx := client.EVM().BuildDeployContractTx(ctx, ethAddr, "./contracts/MultipleEvents.hex")
 
 	client.EVM().SignTransaction(tx, key.PrivateKey)
 	hash := client.EVM().SubmitTransaction(ctx, tx)
@@ -2547,43 +2573,4 @@ func unpackUint64Values(data []byte) []uint64 {
 		vals = append(vals, v)
 	}
 	return vals
-}
-
-// deployContractWithEthTx returns an Ethereum transaction that can be used to deploy the smart contract at "contractPath" on chain
-// It is different from `DeployContractFromFilename` because it used an Ethereum transaction to deploy the contract whereas the
-// latter uses a FIL transaction.
-func deployContractWithEthTx(ctx context.Context, t *testing.T, client *kit.TestFullNode, ethAddr ethtypes.EthAddress,
-	contractPath string) *ethtypes.Eth1559TxArgs {
-	// install contract
-	contractHex, err := os.ReadFile(contractPath)
-	require.NoError(t, err)
-
-	contract, err := hex.DecodeString(string(contractHex))
-	require.NoError(t, err)
-
-	gasParams, err := json.Marshal(ethtypes.EthEstimateGasParams{Tx: ethtypes.EthCall{
-		From: &ethAddr,
-		Data: contract,
-	}})
-	require.NoError(t, err)
-
-	gaslimit, err := client.EthEstimateGas(ctx, gasParams)
-	require.NoError(t, err)
-
-	maxPriorityFeePerGas, err := client.EthMaxPriorityFeePerGas(ctx)
-	require.NoError(t, err)
-
-	// now deploy a contract from the embryo, and validate it went well
-	return &ethtypes.Eth1559TxArgs{
-		ChainID:              build.Eip155ChainId,
-		Value:                big.Zero(),
-		Nonce:                0,
-		MaxFeePerGas:         types.NanoFil,
-		MaxPriorityFeePerGas: big.Int(maxPriorityFeePerGas),
-		GasLimit:             int(gaslimit),
-		Input:                contract,
-		V:                    big.Zero(),
-		R:                    big.Zero(),
-		S:                    big.Zero(),
-	}
 }

@@ -59,7 +59,7 @@ func (e *ethLookup) EthGetCode(ctx context.Context, ethAddr ethtypes.EthAddress,
 		return nil, xerrors.Errorf("cannot get Filecoin address: %w", err)
 	}
 
-	ts, err := e.tipsetResolver.GetTipsetByBlockNumberOrHash(ctx, blkParam)
+	ts, err := e.tipsetResolver.GetTipsetByBlockNumberOrHash(ctx, blkParam, false)
 	if err != nil {
 		return nil, err // don't wrap, to preserve ErrNullRound
 	}
@@ -99,11 +99,13 @@ func (e *ethLookup) EthGetCode(ctx context.Context, ethAddr ethtypes.EthAddress,
 		GasPremium: big.Zero(),
 	}
 
-	// Try calling until we find a height with no migration.
+	// Rewind ts to escape the fork guard, but keep stateCid fixed to the requested epoch: the
+	// result comes from stateCid (ts only supplies execution context), so recomputing it for the
+	// parent would read an earlier epoch's bytecode.
 	var res *api.InvocResult
 	for {
 		res, err = e.stateManager.CallOnState(ctx, stateCid, msg, ts)
-		if err != stmgr.ErrExpensiveFork {
+		if !errors.Is(err, stmgr.ErrExpensiveFork) {
 			break
 		}
 		ts, err = e.chainStore.GetTipSetFromKey(ctx, ts.Parents())
@@ -143,7 +145,7 @@ func (e *ethLookup) EthGetCode(ctx context.Context, ethAddr ethtypes.EthAddress,
 }
 
 func (e *ethLookup) EthGetStorageAt(ctx context.Context, ethAddr ethtypes.EthAddress, position ethtypes.EthBytes, blkParam ethtypes.EthBlockNumberOrHash) (ethtypes.EthBytes, error) {
-	ts, err := e.tipsetResolver.GetTipsetByBlockNumberOrHash(ctx, blkParam)
+	ts, err := e.tipsetResolver.GetTipsetByBlockNumberOrHash(ctx, blkParam, false)
 	if err != nil {
 		return nil, err // don't wrap, to preserve ErrNullRound
 	}
@@ -196,11 +198,13 @@ func (e *ethLookup) EthGetStorageAt(ctx context.Context, ethAddr ethtypes.EthAdd
 		GasPremium: big.Zero(),
 	}
 
-	// Try calling until we find a height with no migration.
+	// Rewind ts to escape the fork guard, but keep stateCid fixed to the requested epoch: the
+	// result comes from stateCid (ts only supplies execution context), so recomputing it for the
+	// parent would read an earlier epoch's storage.
 	var res *api.InvocResult
 	for {
 		res, err = e.stateManager.CallOnState(ctx, stateCid, msg, ts)
-		if err != stmgr.ErrExpensiveFork {
+		if !errors.Is(err, stmgr.ErrExpensiveFork) {
 			break
 		}
 		ts, err = e.chainStore.GetTipSetFromKey(ctx, ts.Parents())
@@ -238,7 +242,7 @@ func (e *ethLookup) EthGetBalance(ctx context.Context, address ethtypes.EthAddre
 		return ethtypes.EthBigInt{}, err
 	}
 
-	ts, err := e.tipsetResolver.GetTipsetByBlockNumberOrHash(ctx, blkParam)
+	ts, err := e.tipsetResolver.GetTipsetByBlockNumberOrHash(ctx, blkParam, false)
 	if err != nil {
 		return ethtypes.EthBigInt{}, err // don't wrap, to preserve ErrNullRound
 	}

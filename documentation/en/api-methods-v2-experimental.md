@@ -5,6 +5,7 @@
 * [Eth](#Eth)
   * [EthAccounts](#EthAccounts)
   * [EthAddressToFilecoinAddress](#EthAddressToFilecoinAddress)
+  * [EthBaseFee](#EthBaseFee)
   * [EthBlockNumber](#EthBlockNumber)
   * [EthCall](#EthCall)
   * [EthChainId](#EthChainId)
@@ -513,6 +514,14 @@ Ethereum clients expect transactions returned via eth_getBlock* to have a receip
 accepts as the best parent tipset, based on the blocks it is accumulating
 within the HEAD tipset.
 
+Filecoin may have null epochs with no tipset. ETH APIs that inspect a
+concrete block or that block's execution reject explicit numeric null
+epochs with ErrNullRound. ETH APIs that read state at an epoch, or sample
+real tipsets across a range, may resolve null epochs to the previous
+non-null tipset. Filecoin state is defined for the null epoch and is
+identical to that previous state, and range APIs skip null epochs when
+walking parent tipsets.
+
 
 ### EthAccounts
 EthAccounts returns a list of Ethereum accounts managed by the node.
@@ -545,6 +554,17 @@ Inputs:
 ```
 
 Response: `"f01234"`
+
+### EthBaseFee
+EthBaseFee retrieves the base fee of the next block.
+Maps to JSON-RPC method: "eth_baseFee".
+
+
+Perms: read
+
+Inputs: `null`
+
+Response: `"0x0"`
 
 ### EthBlockNumber
 EthBlockNumber returns the number of the latest executed block (head - 1).

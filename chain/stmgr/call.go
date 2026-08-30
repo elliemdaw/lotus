@@ -19,6 +19,7 @@ import (
 	"github.com/filecoin-project/lotus/api"
 	"github.com/filecoin-project/lotus/blockstore"
 	"github.com/filecoin-project/lotus/build/buildconstants"
+	"github.com/filecoin-project/lotus/chain/actors/builtin"
 	"github.com/filecoin-project/lotus/chain/rand"
 	"github.com/filecoin-project/lotus/chain/state"
 	"github.com/filecoin-project/lotus/chain/types"
@@ -33,7 +34,12 @@ const (
 	execSameSenderMessages                            // apply all prior messages and any current tipset messages from the same sender
 )
 
-var ErrExpensiveFork = errors.New("refusing explicit call due to state fork at epoch")
+// ErrExpensiveFork matches any expensive-fork refusal; the returned errors carry the epoch.
+var ErrExpensiveFork error = &api.ErrExpensiveFork{}
+
+// ErrSenderValidationFailed signals that the sender actor doesn't exist on chain or is not a
+// valid sender type. Control flow only: callers use it to retry with skip-sender-validation.
+var ErrSenderValidationFailed = errors.New("sender validation failed")
 
 // Call applies the given message to the given tipset's parent state, at the epoch following the
 // tipset's parent. In the presence of null blocks, the height at which the message is invoked may
@@ -60,12 +66,19 @@ func (sm *StateManager) CallOnState(ctx context.Context, stateCid cid.Cid, msg *
 		msg.Value = types.NewInt(0)
 	}
 
-	return sm.callInternal(ctx, msg, nil, ts, stateCid, sm.GetNetworkVersion, false, execSameSenderMessages)
+	return sm.callInternal(ctx, msg, nil, ts, stateCid, sm.GetNetworkVersion, false, execSameSenderMessages, false)
 }
 
 // ApplyOnStateWithGas applies the given message on top of the given state root with gas tracing enabled
 func (sm *StateManager) ApplyOnStateWithGas(ctx context.Context, stateCid cid.Cid, msg *types.Message, ts *types.TipSet) (*api.InvocResult, error) {
-	return sm.callInternal(ctx, msg, nil, ts, stateCid, sm.GetNetworkVersion, true, execNoMessages)
+	return sm.callInternal(ctx, msg, nil, ts, stateCid, sm.GetNetworkVersion, true, execNoMessages, false)
+}
+
+// ApplyOnStateWithGasSkipSenderValidation applies the given message on top of the given state root
+// with gas tracing enabled, but skips sender validation. This allows eth_call and eth_estimateGas
+// to simulate calls from contract addresses or non-existent addresses, matching Geth's behavior.
+func (sm *StateManager) ApplyOnStateWithGasSkipSenderValidation(ctx context.Context, stateCid cid.Cid, msg *types.Message, ts *types.TipSet) (*api.InvocResult, error) {
+	return sm.callInternal(ctx, msg, nil, ts, stateCid, sm.GetNetworkVersion, true, execNoMessages, true)
 }
 
 // CallWithGas calculates the state for a given tipset, and then applies the given message on top of that state.
@@ -77,7 +90,21 @@ func (sm *StateManager) CallWithGas(ctx context.Context, msg *types.Message, pri
 		strategy = execSameSenderMessages
 	}
 
-	return sm.callInternal(ctx, msg, priorMsgs, ts, cid.Undef, sm.GetNetworkVersion, true, strategy)
+	return sm.callInternal(ctx, msg, priorMsgs, ts, cid.Undef, sm.GetNetworkVersion, true, strategy, false)
+}
+
+// CallWithGasSkipSenderValidation is like CallWithGas but skips sender validation,
+// creating an ephemeral placeholder actor if the sender doesn't exist on chain.
+// This enables eth_estimateGas to work with non-existent addresses, matching Geth's behavior.
+func (sm *StateManager) CallWithGasSkipSenderValidation(ctx context.Context, msg *types.Message, priorMsgs []types.ChainMsg, ts *types.TipSet, applyTsMessages bool) (*api.InvocResult, error) {
+	var strategy execMessageStrategy
+	if applyTsMessages {
+		strategy = execAllMessages
+	} else {
+		strategy = execSameSenderMessages
+	}
+
+	return sm.callInternal(ctx, msg, priorMsgs, ts, cid.Undef, sm.GetNetworkVersion, true, strategy, true)
 }
 
 // CallAtStateAndVersion allows you to specify a message to execute on the given stateCid and network version.
@@ -88,14 +115,16 @@ func (sm *StateManager) CallAtStateAndVersion(ctx context.Context, msg *types.Me
 	nvGetter := func(context.Context, abi.ChainEpoch) network.Version {
 		return v
 	}
-	return sm.callInternal(ctx, msg, nil, nil, stateCid, nvGetter, true, execSameSenderMessages)
+	return sm.callInternal(ctx, msg, nil, nil, stateCid, nvGetter, true, execSameSenderMessages, false)
 }
 
 //   - If no tipset is specified, the first tipset without an expensive migration or one in its parent is used.
-//   - If executing a message at a given tipset or its parent would trigger an expensive migration, the call will
-//     fail with ErrExpensiveFork.
+//   - A migration at the tipset's epoch fails with ErrExpensiveFork. A migration at the parent epoch also
+//     fails, unless an explicit (already post-fork) stateCid is supplied.
+//   - If skipSenderValidation is true, the sender actor doesn't need to exist or be an account actor.
+//     This enables eth_call/eth_estimateGas to simulate calls from contract addresses or non-existent addresses.
 func (sm *StateManager) callInternal(ctx context.Context, msg *types.Message, priorMsgs []types.ChainMsg, ts *types.TipSet, stateCid cid.Cid,
-	nvGetter rand.NetworkVersionGetter, checkGas bool, strategy execMessageStrategy) (*api.InvocResult, error) {
+	nvGetter rand.NetworkVersionGetter, checkGas bool, strategy execMessageStrategy, skipSenderValidation bool) (*api.InvocResult, error) {
 	ctx, span := trace.StartSpan(ctx, "statemanager.callInternal")
 	defer span.End()
 
@@ -130,8 +159,15 @@ func (sm *StateManager) callInternal(ctx context.Context, msg *types.Message, pr
 		if err != nil {
 			return nil, xerrors.Errorf("failed to find a non-forking epoch: %w", err)
 		}
-		if sm.HasExpensiveForkBetween(pts.Height(), ts.Height()+1) {
-			return nil, ErrExpensiveFork
+		// HandleStateForks below runs the migration at ts.Height() on demand, so refuse it. An
+		// explicit stateCid (Eth path's TipSetState) already holds every fork below ts.Height();
+		// ts.ParentState() (the default) lags a tipset, so it must also refuse the parent's fork.
+		forkFloor := pts.Height()
+		if stateCid != cid.Undef {
+			forkFloor = ts.Height()
+		}
+		if forkEpoch, ok := sm.expensiveForkBetween(forkFloor, ts.Height()+1); ok {
+			return nil, api.NewErrExpensiveFork(forkEpoch)
 		}
 	}
 
@@ -216,9 +252,50 @@ func (sm *StateManager) callInternal(ctx context.Context, msg *types.Message, pr
 		return nil, xerrors.Errorf("loading state tree: %w", err)
 	}
 
+	senderCreated := false
 	fromActor, err := stTree.GetActor(msg.From)
 	if err != nil {
-		return nil, xerrors.Errorf("call raw get actor: %s", err)
+		if !errors.Is(err, types.ErrActorNotFound) {
+			return nil, xerrors.Errorf("getting sender actor: %w", err)
+		}
+		if !skipSenderValidation {
+			return nil, xerrors.Errorf("sender %s not found on chain: %w", msg.From, ErrSenderValidationFailed)
+		}
+		// The sender doesn't exist on chain. Apply an implicit zero-value send to the
+		// address: the FVM assigns it an ID address and instantiates a placeholder actor,
+		// exactly as a real first transfer to the address would. A placeholder with nonce
+		// 0 and an EAM-namespaced delegated address is a valid message sender, so the
+		// message itself can then be applied explicitly, keeping gas accounting identical
+		// to a real first send from a fresh account. This happens on the buffered
+		// blockstore and is never persisted.
+		createRet, err := vmi.ApplyImplicitMessage(ctx, &types.Message{
+			From:       builtin.SystemActorAddr,
+			To:         msg.From,
+			Value:      big.Zero(),
+			Method:     builtin.MethodSend,
+			GasLimit:   buildconstants.BlockGasLimit,
+			GasFeeCap:  big.Zero(),
+			GasPremium: big.Zero(),
+		})
+		if err != nil {
+			return nil, xerrors.Errorf("creating ephemeral sender placeholder: %w", err)
+		}
+		if createRet.ExitCode != 0 {
+			return nil, xerrors.Errorf("creating ephemeral sender placeholder (exit %s): %s", createRet.ExitCode, createRet.ActorErr)
+		}
+		stateCid, err = vmi.Flush(ctx)
+		if err != nil {
+			return nil, xerrors.Errorf("flushing vm after placeholder creation: %w", err)
+		}
+		stTree, err = state.LoadStateTree(cbor.NewCborStore(buffStore), stateCid)
+		if err != nil {
+			return nil, xerrors.Errorf("loading state tree after placeholder creation: %w", err)
+		}
+		fromActor, err = stTree.GetActor(msg.From)
+		if err != nil {
+			return nil, xerrors.Errorf("getting ephemeral sender placeholder: %w", err)
+		}
+		senderCreated = true
 	}
 
 	msg.Nonce = fromActor.Nonce
@@ -238,9 +315,16 @@ func (sm *StateManager) callInternal(ctx context.Context, msg *types.Message, pr
 	var ret *vm.ApplyRet
 	var gasInfo api.MsgGasCost
 	if checkGas {
-		fromKey, err := sm.ResolveToDeterministicAddress(ctx, msg.From, ts)
-		if err != nil {
-			return nil, xerrors.Errorf("could not resolve key: %w", err)
+		var fromKey address.Address
+		var err error
+		if skipSenderValidation {
+			// Skip resolving sender address since it may not exist on chain
+			fromKey = msg.From
+		} else {
+			fromKey, err = sm.ResolveToDeterministicAddress(ctx, msg.From, ts)
+			if err != nil {
+				return nil, xerrors.Errorf("could not resolve key: %w", err)
+			}
 		}
 
 		var msgApply types.ChainMsg
@@ -266,7 +350,16 @@ func (sm *StateManager) callInternal(ctx context.Context, msg *types.Message, pr
 			}
 		}
 
-		ret, err = vmi.ApplyMessage(ctx, msgApply)
+		if skipSenderValidation && !senderCreated {
+			// The sender exists but is not a valid message sender (e.g. an EVM contract):
+			// apply via the FVM's implicit path, which skips the sender account-type,
+			// nonce and balance checks.
+			ret, err = vmi.ApplyMessageSkipSenderValidation(ctx, msgApply)
+		} else {
+			// Valid senders, including a freshly created ephemeral placeholder, take the
+			// explicit path so gas accounting matches a real execution.
+			ret, err = vmi.ApplyMessage(ctx, msgApply)
+		}
 		if err != nil {
 			return nil, xerrors.Errorf("gas estimation failed: %w", err)
 		}

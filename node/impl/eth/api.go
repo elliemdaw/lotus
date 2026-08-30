@@ -2,11 +2,11 @@ package eth
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/ipfs/go-cid"
 	logging "github.com/ipfs/go-log/v2"
-	"golang.org/x/xerrors"
 
 	"github.com/filecoin-project/go-address"
 	"github.com/filecoin-project/go-jsonrpc"
@@ -22,8 +22,9 @@ import (
 )
 
 var (
-	ErrChainIndexerDisabled = xerrors.New("chain indexer is disabled; please enable the ChainIndexer to use the ETH RPC API")
-	ErrModuleDisabled       = xerrors.New("module disabled, enable with Fevm.EnableEthRPC / LOTUS_FEVM_ENABLEETHRPC")
+	ErrChainIndexerDisabled  = errors.New("chain indexer is disabled; please enable the ChainIndexer to use the ETH RPC API")
+	ErrModuleDisabled        = errors.New("module disabled, enable with Fevm.EnableEthRPC / LOTUS_FEVM_ENABLEETHRPC")
+	ErrEventsNotYetAvailable = errors.New("events for the requested block are not yet available")
 )
 
 var log = logging.Logger("node/eth")
@@ -99,6 +100,7 @@ type EthTraceAPI interface {
 // EthGas ------------------------------------------------------------------------------------------
 
 type EthGasAPI interface {
+	EthBaseFee(ctx context.Context) (ethtypes.EthBigInt, error)
 	EthGasPrice(ctx context.Context) (ethtypes.EthBigInt, error)
 	EthFeeHistory(ctx context.Context, p jsonrpc.RawParams) (ethtypes.EthFeeHistory, error)
 	EthMaxPriorityFeePerGas(ctx context.Context) (ethtypes.EthBigInt, error)
@@ -131,9 +133,10 @@ type EthEventsAPI interface {
 type EthEventsInternal interface {
 	EthEventsAPI
 
-	// GetEthLogsForBlockAndTransaction returns the logs for a block and transaction, it is intended
-	// for internal use rather than being exposed via the JSON-RPC API.
-	GetEthLogsForBlockAndTransaction(ctx context.Context, blockHash *ethtypes.EthHash, txHash ethtypes.EthHash) ([]ethtypes.EthLog, error)
+	// GetEthLogsForBlockAndTransaction returns the logs for a single message in a tipset; the
+	// caller supplies the message CID directly so the indexer query is narrowed at the SQL
+	// level. Intended for internal use rather than being exposed via the JSON-RPC API.
+	GetEthLogsForBlockAndTransaction(ctx context.Context, blockHash *ethtypes.EthHash, msgCid cid.Cid) ([]ethtypes.EthLog, error)
 	// GC runs a garbage collection loop, deleting filters that have not been used within the ttl
 	// window, it is intended for internal use rather than being exposed via the JSON-RPC API.
 	GC(ctx context.Context, ttl time.Duration)
@@ -157,12 +160,25 @@ type EthModuleAPI interface {
 // TipSetResolver is responsible for translating Ethereum API input to tipsets. It may use static
 // rules or F3 to resolve "latest" and "safe" tags as appropriate.
 //
-// In most cases, errors from TipSetResolver should be returned as-is if they are within the
-// top-level of a JSONRPC method so ErrNullRound is properly wrapped when encountered.
+// Explicit numeric block parameters need a per-call-site choice for null epochs:
+//
+//   - strict=true means the API needs an actual tipset at the requested epoch. Use this for
+//     block identity and block execution APIs, such as block lookups, transaction-by-block-index,
+//     block receipts, and block traces. A null epoch returns api.ErrNullRound.
+//   - strict=false means the API is reading or simulating against state at the requested epoch.
+//     Filecoin state is defined across null epochs and is identical to the previous non-null
+//     tipset state, so resolving to that previous tipset is intentional. Range or sampling APIs
+//     such as eth_feeHistory may also use non-strict resolution when they operate on real tipsets
+//     at or before an epoch rather than requiring every epoch in the range to contain a tipset.
+//
+// Tags such as "latest", "pending", "safe", and "finalized" resolve to a concrete tipset before
+// this distinction applies. Block-hash lookups are naturally strict because null epochs have no
+// block hash. In most cases, errors from TipSetResolver should be returned as-is if they are within
+// the top-level of a JSONRPC method so ErrNullRound is properly wrapped when encountered.
 type TipSetResolver interface {
 	GetTipSetByHash(ctx context.Context, blkParam ethtypes.EthHash) (*types.TipSet, error)
 	GetTipsetByBlockNumber(ctx context.Context, blkParam string, strict bool) (*types.TipSet, error)
-	GetTipsetByBlockNumberOrHash(ctx context.Context, blkParam ethtypes.EthBlockNumberOrHash) (*types.TipSet, error)
+	GetTipsetByBlockNumberOrHash(ctx context.Context, blkParam ethtypes.EthBlockNumberOrHash, strict bool) (*types.TipSet, error)
 }
 
 // SyncAPI is a minimal version of full.SyncAPI
@@ -188,6 +204,7 @@ type ChainStore interface {
 
 	// Misc
 	ActorStore(ctx context.Context) adt.Store
+	ComputeBaseFee(ctx context.Context, ts *types.TipSet) (abi.TokenAmount, error)
 }
 
 // StateAPI is a minimal version of full.StateAPI
@@ -212,7 +229,13 @@ type StateManager interface {
 	Call(ctx context.Context, msg *types.Message, ts *types.TipSet) (*api.InvocResult, error)
 	CallOnState(ctx context.Context, stateCid cid.Cid, msg *types.Message, ts *types.TipSet) (*api.InvocResult, error)
 	CallWithGas(ctx context.Context, msg *types.Message, priorMsgs []types.ChainMsg, ts *types.TipSet, applyTsMessages bool) (*api.InvocResult, error)
+	// CallWithGasSkipSenderValidation is like CallWithGas but skips sender validation,
+	// creating an ephemeral placeholder actor if the sender doesn't exist on chain.
+	CallWithGasSkipSenderValidation(ctx context.Context, msg *types.Message, priorMsgs []types.ChainMsg, ts *types.TipSet, applyTsMessages bool) (*api.InvocResult, error)
 	ApplyOnStateWithGas(ctx context.Context, stateCid cid.Cid, msg *types.Message, ts *types.TipSet) (*api.InvocResult, error)
+	// ApplyOnStateWithGasSkipSenderValidation is like ApplyOnStateWithGas but skips sender validation,
+	// allowing eth_call/eth_estimateGas to simulate calls from contract addresses or non-existent addresses.
+	ApplyOnStateWithGasSkipSenderValidation(ctx context.Context, stateCid cid.Cid, msg *types.Message, ts *types.TipSet) (*api.InvocResult, error)
 
 	HasExpensiveForkBetween(parent, height abi.ChainEpoch) bool
 }

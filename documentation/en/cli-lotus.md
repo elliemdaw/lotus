@@ -8,7 +8,7 @@ USAGE:
    lotus [global options] command [command options]
 
 VERSION:
-   1.35.2-dev
+   v1.36.2-dev
 
 COMMANDS:
    daemon   Start a lotus daemon process
@@ -284,7 +284,8 @@ USAGE:
    lotus wallet export [command options] [address]
 
 OPTIONS:
-   --help, -h  show help
+   --format value  output format: 'hex-lotus' (hex-encoded JSON KeyInfo), 'json-lotus' (JSON KeyInfo), 'hex-eth' (raw 32-byte private key as hex, Ethereum-compatible; secp256k1 and delegated keys only) (default: "hex-lotus")
+   --help, -h      show help
 ```
 
 ### lotus wallet import
@@ -297,7 +298,8 @@ USAGE:
    lotus wallet import [command options] [<path> (optional, will read from stdin if omitted)]
 
 OPTIONS:
-   --format value  specify input format for key (default: "hex-lotus")
+   --format value  input format: 'hex-lotus' (hex-encoded JSON KeyInfo), 'json-lotus' (JSON KeyInfo), 'gfc-json' (go-filecoin JSON), 'hex-eth' (raw 32-byte private key as hex, Ethereum-compatible; key type set via --type) (default: "hex-lotus")
+   --type value    key type for raw private-key formats such as 'hex-eth': 'secp256k1' or 'delegated' (default: "delegated")
    --as-default    import the given key as your new default key (default: false)
    --help, -h      show help
 ```
@@ -1324,8 +1326,7 @@ CATEGORY:
 
 COMMANDS:
    power                       Query network or miner power
-   sectors                     Query the sector set of a miner
-   active-sectors              Query the active sector set of a miner
+   sectors                     Query the active sector set of a miner (use --all for the full sector set)
    list-actors                 list all actors in the network
    list-miners                 list all miners in the network
    circulating-supply          Get the exact current circulating supply of Filecoin
@@ -1371,27 +1372,15 @@ OPTIONS:
 
 ```
 NAME:
-   lotus state sectors - Query the sector set of a miner
+   lotus state sectors - Query the active sector set of a miner (use --all for the full sector set)
 
 USAGE:
    lotus state sectors [command options] [minerAddress]
 
 OPTIONS:
    --show-partitions  show sector deadlines and partitions (default: false)
-   --help, -h         show help
-```
-
-### lotus state active-sectors
-
-```
-NAME:
-   lotus state active-sectors - Query the active sector set of a miner
-
-USAGE:
-   lotus state active-sectors [command options] [minerAddress]
-
-OPTIONS:
-   --show-partitions  show sector deadlines and partitions (default: false)
+   --all              show all sectors (default: false)
+   --human            show human-readable UTC time and FIL values instead of raw epoch/attoFIL (default: false)
    --help, -h         show help
 ```
 
